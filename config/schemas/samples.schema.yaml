@@ -10,9 +10,9 @@ properties:
   Mutect2_vcf:
     type: string
     description: Path to Mutect2 vcf file
-  Strelka2_indel_vcf:
+  DeepSomatic_vcf:
     type: string
-    description: Path to Strelka2 vcf file
+    description: Path to DeepSomatic vcf file
   tumour_bam_cram:
     type: string
     description: Path to tumour bam or cram file
@@ -31,7 +31,7 @@ required:
   - tumour_name
   - normal_name
   - Mutect2_vcf
-  - Strelka2_indel_vcf
+  - DeepSomatic_vcf
   - tumour_bam_cram
   - sequencing_read_length
   - sequencing_adapter_1

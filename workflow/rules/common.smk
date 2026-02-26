@@ -118,8 +118,8 @@ def get_normal_name(wildcards):
 def get_mutect2_vcf(wildcards):
     return samples.at[wildcards.tum, "Mutect2_vcf"]
 
-def get_strelka_vcf(wildcards):
-    return samples.at[wildcards.tum, "Strelka2_indel_vcf"]
+def get_deepsomatic_vcf(wildcards):
+    return samples.at[wildcards.tum, "DeepSomatic_vcf"]
 
 def get_tumour_bam(wildcards):
     return samples.at[wildcards.tum, "tumour_bam_cram"]
@@ -150,5 +150,13 @@ def bsgenome_prereq():
     if config['ref_genome_version'].lower()=='grch37':
         return ".Rlib/hg19_download_complete.txt"
     return []
+def bsgenome_prereq():
+    ref = str(config["ref_genome_version"]).lower()
+    if ref == "grch37":
+        return f"{ODIR}/.Rlib/hg19_download_complete.txt"
+    elif ref == "grch38":
+        return f"{ODIR}/.Rlib/hg38_download_complete.txt"
+    else:
+        raise ValueError("ref_genome_version must be grch37 or grch38")
 
 
