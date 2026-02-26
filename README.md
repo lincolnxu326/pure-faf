@@ -87,6 +87,10 @@ snakemake --cores 2 --use-conda --use-singularity
   - AstraZeneca
   - [ORCID profile](https://orcid.org/0000-0003-1170-9915)
 
+- Lincoln Xu
+  - The Francis Crick Institute
+  -[ORCID profile](https://orcid.org/0009-0007-8015-2600)
+
 ## References
 
 > Köster, J., Mölder, F., Jablonski, K. P., Letcher, B., Hall, M. B., Tomkins-Tinch, C. H., Sochat, V., Forster, J., Lee, S., Twardziok, S. O., Kanitz, A., Wilm, A., Holtgrewe, M., Rahmann, S., & Nahnsen, S. _Sustainable data analysis with Snakemake_. F1000Research, 10:33, 10, 33, **2021**. https://doi.org/10.12688/f1000research.29032.2.
