@@ -1,8 +1,9 @@
-samplesheet: ".test/config/samples.tsv"
+samplesheet: ".test/config/samples_ds.tsv"
 
-ref_genome_version: GRCh38
-reference_genome_fasta: /flask/reference/Genomics/aws-igenomes/Homo_sapiens/GATK/GRCh38/Sequence/WholeGenomeFasta/Homo_sapiens_assembly38.fasta
-#/flask/reference/Genomics/aws-igenomes/Homo_sapiens/GATK/GRCh37/Sequence/WholeGenomeFasta/human_g1k_v37_decoy.fasta
+ref_genome_version: grch37 #GRCh38
+reference_genome_fasta: /flask/reference/Genomics/aws-igenomes/Homo_sapiens/GATK/GRCh37/Sequence/WholeGenomeFasta/human_g1k_v37_decoy.fasta
+#/flask/reference/Genomics/aws-igenomes/Homo_sapiens/GATK/GRCh38/Sequence/WholeGenomeFasta/Homo_sapiens_assembly38.fasta
+
 
 # VCF quality filter thresholds
 ROQ: 20
@@ -21,7 +22,7 @@ pval_threshold_low_AD: 1e-6
 VAF: [0.01, 0.04, 0.05, 0.1]
 
 # Output directory name
-odir: run3
+odir: run_new
 
 #samples to exclude
 exclude_samples: []
