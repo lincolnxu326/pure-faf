@@ -150,6 +150,8 @@ def bsgenome_prereq():
     if config['ref_genome_version'].lower()=='grch37':
         return ".Rlib/hg19_download_complete.txt"
     return []
+
+# function to get the correct BSgenome prerequisite based on reference genome version
 def bsgenome_prereq():
     ref = str(config["ref_genome_version"]).lower()
     if ref == "grch37":
