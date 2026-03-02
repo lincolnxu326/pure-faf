@@ -17,3 +17,4 @@ workflow/notebooks/.ipynb_checkpoints/**
 **/vcfQC.R
 **/ds_new.pdf
 ./temp_test/**
+workflow/old_Snakefile
