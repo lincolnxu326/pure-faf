@@ -1,0 +1,2 @@
+##INFO=<ID=BETA,Number=1,Type=Float,Description="Shape Distributions of variants in PON">
+##INFO=<ID=FRACTION,Number=1,Type=Float,Description="Fraction of samples with the variants in the PON">
