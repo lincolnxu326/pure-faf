@@ -33,7 +33,6 @@
 
 # ----------------- Logging -----------------
 
-# Prefer an explicit tool_log param if present (so Snakemake's log: file can be disposable)
 if ("tool_log" %in% names(snakemake@params)) {
   log_path <- snakemake@params[["tool_log"]]
 } else {
@@ -47,6 +46,15 @@ sink(log, type = "message", append = TRUE)
 message("-----------------------------------------------")
 message("-----------------------------------------------")
 message(date())
+
+close_all <- function(status = 0L) {
+  message(date())
+  message("-----------------------------------------------")
+  try(sink(type = "message"), silent = TRUE)
+  try(sink(), silent = TRUE)
+  try(close(log), silent = TRUE)
+  quit(save = "no", status = status)
+}
 
 ##############################################
 .libPaths(".Rlib")
@@ -100,6 +108,38 @@ qpath <- function(x) {
   shQuote(normalizePath(x, mustWork = FALSE))
 }
 
+# Header-only MicroSEC TSV (gz). This must match your microsec_annotate expected header.
+write_microsec_header_only <- function(path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  hdr <- paste(
+    c(
+      "Sample","Mut_type","Chr","Pos","Ref","Alt","SimpleRepeat_TRF","Neighborhood_sequence",
+      "percent_Alt","sum_AD","Chr_original","Chr_bam","read_length","total_read","soft_clipped_read",
+      "flag_hairpin","pre_support_length","post_support_length","short_support_length","pre_farthest",
+      "post_farthest","low_quality_base_rate_under_q18","low_quality_pre","low_quality_post",
+      "distant_homology_rate","soft_clipped_rate","prob_filter_1","prob_filter_3_pre","prob_filter_3_post",
+      "filter_1_mutation_intra_hairpin_loop","filter_2_hairpin_structure",
+      "filter_3_microhomology_induced_mutation","filter_4_highly_homologous_region",
+      "filter_5_soft_clipped_reads","filter_6_simple_repeat","filter_7_mutation_at_homopolymer",
+      "filter_8_low_quality","msec_filter_123","msec_filter_1234","msec_filter_all","comment"
+    ),
+    collapse = "\t"
+  )
+  con <- gzfile(path, open = "wt")
+  writeLines(hdr, con = con)
+  close(con)
+}
+
+# "empty" meaning: no data lines beyond header (or file missing/0 bytes)
+is_empty_mut_file <- function(f) {
+  if (!file.exists(f)) return(TRUE)
+  sz <- file.info(f)$size
+  if (is.na(sz) || sz == 0L) return(TRUE)
+  x <- readLines(f, n = 50L, warn = FALSE)
+  x <- x[nzchar(trimws(x))]
+  length(x) < 2L
+}
+
 # ----------------- Read and unpack sample_info (single sample) -----------------
 
 sample_info <- read.csv(sample_list, header = FALSE, stringsAsFactors = FALSE, sep = "\t")
@@ -145,69 +185,84 @@ bed_path          <- normalizePath(snakemake@output[["regions"]], mustWork = FAL
 tmp_dir <- dirname(bam_file_slim)
 if (!dir.exists(tmp_dir)) dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
 
-# ----------------- Genome & chromosome naming (MicroSEC/ref space) -----------------
+# ----------------- EARLY EXIT: empty mutation_info -----------------
+
+if (is_empty_mut_file(mutation_file)) {
+  message(sprintf("[%s] mutation_info is empty/header-only. Skipping MicroSEC and emitting header-only TSV + placeholder outputs.", sample_name))
+
+  dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+  dir.create(dirname(bed_path), recursive = TRUE, showWarnings = FALSE)
+  dir.create(dirname(bam_file_slim), recursive = TRUE, showWarnings = FALSE)
+
+  file.create(bed_path)
+  file.create(bam_file_slim)
+  file.create(bam_file_slim_bai)
+
+  write_microsec_header_only(out_path)
+  close_all(status = 0L)
+}
+
+# ----------------- Genome & chromosome naming -----------------
 
 ref_genome <- fun_load_genome(organism)
 chr_no     <- fun_load_chr_no(organism)
 
-if (ref_genome@user_seqnames[[1]] == "chr1") {
-  chromosomes <- paste0("chr", c(seq_len(chr_no - 2), "X", "Y"))
-} else {
-  chromosomes <- paste0("", c(seq_len(chr_no - 2), "X", "Y"))
-}
-
-# ----------------- Load mutations -----------------
+# ----------------- Load mutations (ORIGINAL MicroSEC loader) -----------------
 
 df_mutation <- fun_load_mutation(mutation_file, sample_name, ref_genome, chr_no)
 
-# Normalize required columns & fallbacks
-req_cols <- c("Sample","Mut_type","Chr","Pos","Ref","Alt","SimpleRepeat_TRF","Neighborhood_sequence")
-missing <- setdiff(req_cols, colnames(df_mutation))
-if (length(missing) > 0) {
-  for (mc in missing) df_mutation[[mc]] <- "-"
+# If loader returns nothing, exit cleanly
+if (nrow(df_mutation) == 0) {
+  message(sprintf("[%s] fun_load_mutation returned 0 rows. Emitting header-only result.", sample_name))
+
+  dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+  dir.create(dirname(bed_path), recursive = TRUE, showWarnings = FALSE)
+  dir.create(dirname(bam_file_slim), recursive = TRUE, showWarnings = FALSE)
+
+  file.create(bed_path)
+  file.create(bam_file_slim)
+  file.create(bam_file_slim_bai)
+
+  write_microsec_header_only(out_path)
+  close_all(status = 0L)
 }
 
-df_mutation <- df_mutation %>%
-  mutate(
-    Sample = as.character(Sample),
-    Mut_type = as.character(Mut_type),
-    Chr = as.character(Chr),           # ref_genome space
-    Pos = as.integer(Pos),
-    Ref = as.character(Ref),
-    Alt = as.character(Alt),
-    SimpleRepeat_TRF = ifelse(is.na(SimpleRepeat_TRF) | SimpleRepeat_TRF == "", "-", as.character(SimpleRepeat_TRF)),
-    Neighborhood_sequence = ifelse(is.na(Neighborhood_sequence) | Neighborhood_sequence == "", "-", as.character(Neighborhood_sequence))
-  ) %>%
-  filter(!is.na(Pos), Pos > 0)
-
-# ----------------- Harmonise mutation chromosomes to BAM/CRAM space (separate column) -----------------
-
-# Use samtools to read header; works for BAM and CRAM
-header_raw <- tryCatch(
-  system(
-    sprintf("bash -lc 'samtools view -H %s'", qpath(bam_file_in)),
-    intern = TRUE
-  ),
-  error = function(e) {
-    stop(sprintf("Failed to read BAM/CRAM header for %s via samtools: %s",
-                 bam_file_in, conditionMessage(e)))
-  }
-)
-
-sq_lines <- header_raw[grepl("^@SQ", header_raw)]
-if (length(sq_lines) == 0) {
-  stop(sprintf("No @SQ lines found in BAM/CRAM header for %s", bam_file_in))
-}
-
-# Extract SN: contig names
-bam_targets <- sub(".*SN:([^ \t]+).*", "\\1", sq_lines)
-
-bam_has_chr <- any(grepl("^chr", bam_targets))
+# ----------------- CRITICAL: normalise Chr naming to match BSgenome -----------------
+# Prevent: Error in ref_genome[[chrom]] : no such sequence
 ref_has_chr <- any(grepl("^chr", ref_genome@user_seqnames))
 
 df_mutation <- df_mutation %>%
   mutate(
-    # Chr stays in ref_genome space for MicroSEC
+    Chr = as.character(Chr),
+    Chr = if (ref_has_chr) {
+      ifelse(grepl("^chr", Chr), Chr, paste0("chr", Chr))
+    } else {
+      sub("^chr", "", Chr)
+    }
+  ) %>%
+  filter(Chr %in% ref_genome@user_seqnames)
+
+if (nrow(df_mutation) == 0) {
+  message(sprintf("[%s] No mutations remain after contig normalisation to BSgenome. Emitting header-only result.", sample_name))
+  write_microsec_header_only(out_path)
+  close_all(status = 0L)
+}
+
+# ----------------- Harmonise mutation chromosomes to BAM/CRAM space (separate column) -----------------
+
+header_raw <- tryCatch(
+  system(sprintf("bash -lc 'samtools view -H %s'", qpath(bam_file_in)), intern = TRUE),
+  error = function(e) stop(sprintf("Failed to read BAM/CRAM header for %s via samtools: %s", bam_file_in, conditionMessage(e)))
+)
+
+sq_lines <- header_raw[grepl("^@SQ", header_raw)]
+if (length(sq_lines) == 0) stop(sprintf("No @SQ lines found in BAM/CRAM header for %s", bam_file_in))
+
+bam_targets <- sub(".*SN:([^ \t]+).*", "\\1", sq_lines)
+bam_has_chr <- any(grepl("^chr", bam_targets))
+
+df_mutation <- df_mutation %>%
+  mutate(
     Chr_bam = dplyr::case_when(
       bam_has_chr && !ref_has_chr ~ ifelse(grepl("^chr", Chr), Chr, paste0("chr", Chr)),
       !bam_has_chr && ref_has_chr ~ sub("^chr", "", Chr),
@@ -215,15 +270,17 @@ df_mutation <- df_mutation %>%
     )
   )
 
-message(sprintf("[%s] BAM/CRAM contigs example: %s",
-                sample_name,
-                paste(head(bam_targets, 5), collapse = ", ")))
-message(sprintf("[%s] Unique mutation chromosomes (ref space): %s",
-                sample_name,
-                paste(sort(unique(df_mutation$Chr)), collapse = ", ")))
-message(sprintf("[%s] Unique mutation chromosomes (BAM space): %s",
-                sample_name,
-                paste(sort(unique(df_mutation$Chr_bam)), collapse = ", ")))
+message(sprintf("[%s] BAM/CRAM contigs example: %s", sample_name, paste(head(bam_targets, 5), collapse = ", ")))
+message(sprintf("[%s] Unique mutation chromosomes (ref space): %s", sample_name, paste(sort(unique(df_mutation$Chr)), collapse = ", ")))
+message(sprintf("[%s] Unique mutation chromosomes (BAM space): %s", sample_name, paste(sort(unique(df_mutation$Chr_bam)), collapse = ", ")))
+
+# Filter to BAM contigs BEFORE building BED (prevents empty BED/samtools weirdness)
+df_mutation <- df_mutation %>% filter(Chr_bam %in% bam_targets)
+if (nrow(df_mutation) == 0) {
+  message(sprintf("[%s] No mutations are on BAM contigs after subsetting (pre-BED). Emitting header-only result.", sample_name))
+  write_microsec_header_only(out_path)
+  close_all(status = 0L)
+}
 
 # ----------------- Build BED around mutations (±200; merge if next within 400bp) -----------------
 
@@ -240,13 +297,13 @@ for (i in chromosomes_bam) {
   start <- max(1, df_chr$Pos[1] - 200)
   for (k in seq_len(nrow(df_chr))) {
     if (k == nrow(df_chr) || df_chr$Pos[k+1] - df_chr$Pos[k] > 400) {
-      download_region <- rbind(download_region,
-                               c(i, start - 1, df_chr$Pos[k] + 200))
+      download_region <- rbind(download_region, c(i, start - 1, df_chr$Pos[k] + 200))
       if (k < nrow(df_chr)) start <- max(1, df_chr$Pos[k+1] - 200)
     }
   }
 }
 
+dir.create(dirname(bed_path), recursive = TRUE, showWarnings = FALSE)
 write_tsv(download_region, bed_path, col_names = FALSE, progress = FALSE)
 
 # ----------------- samtools pipeline (streamed) -----------------
@@ -268,8 +325,7 @@ if (input_ext == "bam") {
     threads, mem_per_thread, qpath(sort_prefix), qpath(bam_file_slim)
   )
 } else if (input_ext == "cram") {
-  if (!exists("reference_genome"))
-    stop("CRAM input requires reference_genome in sample info TSV.")
+  if (!exists("reference_genome")) stop("CRAM input requires reference_genome in sample info TSV.")
   cmd <- sprintf(
     paste(
       "bash -lc 'set -euo pipefail;",
@@ -293,29 +349,19 @@ run_cmd(sprintf("bash -lc 'set -euo pipefail; samtools index %s'", qpath(bam_fil
 
 df_bam <- fun_load_bam(bam_file_slim)
 
-# ----------------- Filter mutations to BAM contigs (BAM space) -----------------
+# ----------------- Filter mutations to slim BAM contigs (BAM space) -----------------
 
 targets <- names(Rsamtools::scanBamHeader(bam_file_slim)[[1]]$targets)
 missing_chr <- setdiff(unique(df_mutation$Chr_bam), targets)
 if (length(missing_chr) > 0) {
-  message(sprintf("[%s] Skipping contigs not in BAM (BAM space): %s",
-                  sample_name, paste(missing_chr, collapse = ", ")))
+  message(sprintf("[%s] Skipping contigs not in slim BAM (BAM space): %s", sample_name, paste(missing_chr, collapse = ", ")))
 }
 df_mutation <- dplyr::filter(df_mutation, Chr_bam %in% targets)
 
-# If nothing left after subsetting, emit empty result and exit
 if (nrow(df_mutation) == 0) {
-  message(sprintf("[%s] No mutations left on BAM contigs after subsetting; writing empty result.", sample_name))
-  con <- gzfile(out_path, "w")
-  writeLines("", con)  # empty gz file
-  close(con)
-  message(sprintf("MicroSEC finished successfully (empty result). Output: %s", out_path))
-  message(date())
-  message("-----------------------------------------------")
-  sink(type = "message")
-  sink()
-  close(log)
-  q(save = "no", status = 0)
+  message(sprintf("[%s] No mutations left on slim BAM contigs after subsetting; writing header-only result.", sample_name))
+  write_microsec_header_only(out_path)
+  close_all(status = 0L)
 }
 
 # ----------------- MicroSEC core (single sample) -----------------
@@ -364,10 +410,5 @@ msec <- fun_analysis(
 
 fun_save(msec, out_path)
 message(sprintf("MicroSEC finished successfully. Output: %s", out_path))
-message(date())
-message("-----------------------------------------------")
 
-# Close sinks and log file connection
-sink(type = "message")
-sink()
-close(log)
+close_all(status = 0L)
