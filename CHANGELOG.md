@@ -1,5 +1,49 @@
 # Changelog
 
+## [2.0.0](https://github.com/rabiafidan/pure-faf/compare/v1.1...lincolnxu326:pure-faf:features/deepsomatic-intersect-filter) (2026-03-02)
+
+### Features
+
+* replaced Strelka2 evidence step with DeepSomatic evidence step and intersected Mutect2 PON filtered calls with DeepSomatic by position for both SNVs and INDELs 
+* annotated Mutect2 calls with DeepSomatic FILTER state via INFO/DS_FILTER (PASS, RefCall, LowQual, NoCall, GERMLINE) and retained “missing in DeepSomatic” sites as DS_FILTER="."
+* changed intersection logic of DeepSomatic and Mutect2 from total join to left join. 
+* implemented SNV filtering logic using VAF tiers and call support
+  * 1% < VAF ≤ 5% requires Mutect2 FILTER=PASS and DS_FILTER=PASS
+  * VAF > 5% requires Mutect2 FILTER=PASS
+  * Mutect2 FILTER=clustered_events requires VAF > 10%
+* implemented INDEL filtering logic using VAF tiers, clustered events handling, and repeat associated insertion suppression via MutationalPatterns muttype
+  * VAF > 5% requires Mutect2 FILTER=PASS and DS_FILTER=PASS
+  * VAF > 10% requires Mutect2 FILTER=PASS
+  * Mutect2 FILTER=clustered_events requires VAF > 30%
+  * bp_insertion events are removed unless supported by both Mutect2 and DeepSomatic (both PASS)
+* added merge step for filtered SNVs and INDELs into a single DeepSomatic intersect filtered VCF, followed by AD tier split for downstream steps
+* Rule ffpe_sig and Indel filtering shares the same conda environment, with additional step prior to both to install MutationalSignatures and Bs.Genome to prevents repeated installation.
+* changed ROQ >= to ROQ > to comply with manuscripts
+
+
+### Bug Fixes
+
+* resolved reference mismatch failures during normalisation by using the pipeline reference selection logic (GRCh37 vs GRCh38) and applying bcftools norm against the correct FASTA for the run
+* Added safeguard in MicroSEC_parameterised2.R against error caused by empty mutational_info.txt from lowAD and highAD variants 
+* Added chormosome naming checks (chr1 vs. 1) to fix missing microsec annotation
+*
+
+
+### Documentation
+
+* updated README to reflect DeepSomatic inputs, DS_FILTER annotation, and revised filtering criteria (paper reference: pending)
+* updated samples schema and configuration examples to include DeepSomatic VCF paths and remove Strelka2 specific wording where applicable
+
+### Breaking Changes
+
+* replaced Strelka2 input requirement with DeepSomatic input requirement
+  * samplesheet and schema now expect a DeepSomatic VCF path (or a backward compatible alias if maintained)
+* removed or deprecated Strelka2 specific rules and helper functions in favour of DeepSomatic equivalents
+
+
+
+
+
 ## [1.1.0](https://github.com/snakemake-workflows/snakemake-workflow-template/compare/v1.0.0...v1.1.0) (2025-07-29)
 
 
