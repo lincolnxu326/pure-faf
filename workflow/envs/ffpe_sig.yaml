@@ -1,9 +1,0 @@
-name: ffpe_sig
-channels:
-  - conda-forge
-  - bioconda
-  - nodefaults
-dependencies:
-  - r-base > 4.3
-  - r-tidyverse
-  - r-pheatmap

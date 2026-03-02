@@ -1,0 +1,12 @@
+name: indel_ffpe_sig
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - r-base > 4.5.0 # New for mutationalpatterns
+  - r-biocmanager
+  - r-tidyverse
+  - r-pheatmap
+  - bcftools
+  - htslib
