@@ -168,7 +168,7 @@ rule test_beta_dist:
         """
 # Filter vcf based on quality metrics
 # Variants are kept if 
-#AD> <threshold> & ROQ>= <threshold> & DP> <threshold> & FILTER is PASS or clustered_events or on panel_of_normals & p_ADfit < <threshold>
+#AD> <threshold> & ROQ> <threshold> & DP> <threshold> & FILTER is PASS or clustered_events or on panel_of_normals & p_ADfit < <threshold>
 # -----------------------------------------------------
 rule qual_filter:
     input:
@@ -196,67 +196,41 @@ rule qual_filter:
         echo "----------------------------------------------" >> {log} 2>&1 &&
         date >> {log} 2>&1 &&
         bcftools view --write-index \
-        -i '(FORMAT/DP[1]>{params.DP} && INFO/ROQ>={params.ROQ} && FMT/AD[1:1]>{params.AD}) && (INFO/p_ADfit < {params.PON_ALPHA} || INFO/p_ADfit = ".") && (FILTER="PASS" || FILTER="clustered_events" || FILTER="panel_of_normals" || FILTER="clustered_events;panel_of_normals" || FILTER="panel_of_normals;clustered_events")' \
+        -i '(FORMAT/DP[1]>{params.DP} && INFO/ROQ>{params.ROQ} && FMT/AD[1:1]>{params.AD}) && (INFO/p_ADfit < {params.PON_ALPHA} || INFO/p_ADfit = ".") && (FILTER="PASS" || FILTER="clustered_events" || FILTER="panel_of_normals" || FILTER="clustered_events;panel_of_normals" || FILTER="panel_of_normals;clustered_events")' \
         -Oz -o {output.v} {input.v} >> {log} 2>&1
         """
 
-# Split vcf into snvs and indels and tiers based on AD threshold
+# Intersect Mutect2 PON filtered VCF with DeepSomatic VCF (position based),
+# annotate Mutect2 with DeepSomatic FILTER as INFO/DS_FILTER, then split into SNVs and INDELs
 # -----------------------------------------------------
-rule split_snv_indel:
+rule DeepSomatic_intersect:
     input:
-        f'{ODIR}/PON/3-filtered_{{tum}}.vcf.gz.csi',
-        v=f'{ODIR}/PON/3-filtered_{{tum}}.vcf.gz'
+        m2_PON_filt = f"{ODIR}/PON/3-filtered_{{tum}}.vcf.gz",
+        i0          = f"{ODIR}/PON/3-filtered_{{tum}}.vcf.gz.csi",
+        deepsomatic = get_deepsomatic_vcf,
+        ref         = REF_GEN
     output:
-        s=f'{ODIR}/temp/3-snv_high_AD_{{tum}}.vcf.gz',
-        i1=f'{ODIR}/temp/3-snv_high_AD_{{tum}}.vcf.gz.csi',
-        s_low_AD=f'{ODIR}/temp/3-snv_low_AD_{{tum}}.vcf.gz',
-        i0 =f'{ODIR}/temp/3-snv_low_AD_{{tum}}.vcf.gz.csi',
-        ind=f'{ODIR}/temp/4-indel_high_AD_{{tum}}.vcf.gz',
-        i2=f'{ODIR}/temp/4-indel_high_AD_{{tum}}.vcf.gz.csi',
-        ind_low_AD=f'{ODIR}/temp/4-indel_low_AD_{{tum}}.vcf.gz',
-        i3=f'{ODIR}/temp/4-indel_low_AD_{{tum}}.vcf.gz.csi'
-    params:
-        AD_TIER=AD_TIER
-    conda:
-        "envs/bcftools.yaml"
-    threads: 1
-    resources:
-        mem_mb=4000,
-        slurm_cpus_per_task=1
-    log:
-        f"{ODIR}/logs/6-split_snv_indel_{{tum}}.log"
-    shell:
-        """
-        echo "----------------------------------------------" >> {log} 2>&1 &&
-        echo "----------------------------------------------" >> {log} 2>&1 &&
-        date >> {log} 2>&1 &&
-        bcftools view --write-index -v snps -i 'FMT/AD[1:1]>={params.AD_TIER}' -Oz -o {output.s} {input.v} >> {log} 2>&1 && 
-        bcftools view --write-index -v snps -i 'FMT/AD[1:1]<{params.AD_TIER}' -Oz -o {output.s_low_AD} {input.v} >> {log} 2>&1 && 
-        bcftools view --write-index -v indels -i 'FMT/AD[1:1]>={params.AD_TIER}' -Oz -o {output.ind} {input.v} >> {log} 2>&1 && 
-        bcftools view --write-index -v indels -i 'FMT/AD[1:1]<{params.AD_TIER}' -Oz -o {output.ind_low_AD} {input.v} >> {log} 2>&1
-        """
-# Intersect low-AD indels with Strelka2 indels
-# Position-based intersection, requiring same type of mut (INS/DEL), no alt allele enforcement
-# -----------------------------------------------------
-rule indel_low_AD_strelka_intersection:
-    input:
-        ind_low_AD = f"{ODIR}/temp/4-indel_low_AD_{{tum}}.vcf.gz",
-        i3         = f"{ODIR}/temp/4-indel_low_AD_{{tum}}.vcf.gz.csi",
-        strelka_indel = get_strelka_vcf,
-        ref = REF_GEN
-    output:
-        ind_low_AD_strelka = f"{ODIR}/temp/5-indel_low_AD_strelka_intersected_{{tum}}.vcf.gz",
-        i4                  = f"{ODIR}/temp/5-indel_low_AD_strelka_intersected_{{tum}}.vcf.gz.csi",
-        # intermediates
-        m2_norm             = temp(f"{ODIR}/temp/5-indel_low_AD_{{tum}}.norm.vcf.gz"),
-        m2_norm_csi         = temp(f"{ODIR}/temp/5-indel_low_AD_{{tum}}.norm.vcf.gz.csi"),
-        st_norm             = temp(f"{ODIR}/temp/5-strelka_{{tum}}.norm.vcf.gz"),
-        st_norm_csi         = temp(f"{ODIR}/temp/5-strelka_{{tum}}.norm.vcf.gz.csi"),
-        m2_bed_uns          = temp(f"{ODIR}/temp/5-indel_low_AD_{{tum}}.unsorted.bed"),
-        st_bed_uns          = temp(f"{ODIR}/temp/5-strelka_{{tum}}.unsorted.bed"),
-        m2_bed              = temp(f"{ODIR}/temp/5-indel_low_AD_{{tum}}.bed"),
-        st_bed              = temp(f"{ODIR}/temp/5-strelka_{{tum}}.bed"),
-        match_bed           = f"{ODIR}/temp/5-indel_low_AD_strelka_{{tum}}.match.bed"
+        SNV_intersect_DS   = f"{ODIR}/temp/3-SNV_DeepSomatic_intersect_{{tum}}.vcf.gz",
+        i1                 = f"{ODIR}/temp/3-SNV_DeepSomatic_intersect_{{tum}}.vcf.gz.csi",
+        INDEL_intersect_DS = f"{ODIR}/temp/3-INDEL_DeepSomatic_intersect_{{tum}}.vcf.gz",
+        i2                 = f"{ODIR}/temp/3-INDEL_DeepSomatic_intersect_{{tum}}.vcf.gz.csi",
+
+        # intermediates for record keeping
+        m2_norm            = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.norm.vcf.gz",
+        m2_norm_csi        = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.norm.vcf.gz.csi",
+        ds_norm            = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.ds.norm.vcf.gz",
+        ds_norm_csi        = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.ds.norm.vcf.gz.csi",
+
+        m2_pos_bed         = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.pos.bed",
+        ds_map             = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.ds.filter.tsv.gz",
+        ds_map_tbi         = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.ds.filter.tsv.gz.tbi",
+        match_bed          = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.match.bed",
+
+        m2_intersect       = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.intersect.vcf.gz",
+        m2_intersect_csi   = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.intersect.vcf.gz.csi",
+
+        anno               = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.ds_annotated.vcf.gz",
+        anno_csi           = f"{ODIR}/temp/3-DeepSomatic_{{tum}}.m2.ds_annotated.vcf.gz.csi"
     conda:
         "envs/bcftools.yaml"
     threads: 8
@@ -264,95 +238,260 @@ rule indel_low_AD_strelka_intersection:
         mem_mb=16000,
         slurm_cpus_per_task=8
     log:
-        f"{ODIR}/logs/7-indel_low_AD_strelka_intersect_{{tum}}.log"
+        f"{ODIR}/logs/6-DeepSomatic_intersect_{{tum}}.log"
     shell:
-        """
+        r"""
         echo "----------------------------------------------" >> {log} 2>&1 &&
         echo "----------------------------------------------" >> {log} 2>&1 &&
         date >> {log} 2>&1 &&
 
-        set -euo pipefail 
-        export LC_ALL=C 
+        set -euo pipefail
+        export LC_ALL=C
 
-        # Ensure reference index exists
-        [ -s {input.ref}.fai ] || samtools faidx {input.ref} >> {log} 2>&1 &&
+        # 1) Normalise both VCFs
+        bcftools norm --threads {threads} -f {input.ref} -m -any -Oz -o {output.m2_norm} {input.m2_PON_filt} >> {log} 2>&1 &&
+        bcftools index -f -c {output.m2_norm} >> {log} 2>&1 &&
 
-        # 1) Normalize & split multiallelics (write index inline) with threads
-        bcftools norm --threads {threads} -f {input.ref} -m -any --write-index -Oz -o {output.m2_norm} {input.ind_low_AD} >> {log} 2>&1 &&
-        bcftools norm --threads {threads} -f {input.ref} -m -any --write-index -Oz -o {output.st_norm} {input.strelka_indel} >> {log} 2>&1 &&
+        bcftools norm --threads {threads} -f {input.ref} -m -any -Oz -o {output.ds_norm} {input.deepsomatic} >> {log} 2>&1 &&
+        bcftools index -f -c {output.ds_norm} >> {log} 2>&1 &&
 
-        # 2) Extract INDELs to BED (VCF 1-based -> BED 0-based)
-        bcftools query -i 'TYPE="indel"' -f '%CHROM\\t%POS\\t%REF\\t%ALT\\n' {output.m2_norm} \
-        | awk 'BEGIN{{OFS="\\t"}}{{
-            lr=length($3); la=length($4);
-            if(la>lr)      print $1, $2-1, $2, "INS";
-            else if(lr>la) print $1, $2-1, $2-1+(lr-la), "DEL";
-        }}' > {output.m2_bed_uns} 2>> {log} &&
+        # 2) BED of Mutect2 positions
+        bcftools query -f '%CHROM\t%POS\n' {output.m2_norm} \
+        | awk 'BEGIN{{OFS="\t"}}{{print $1,$2-1,$2}}' \
+        | sort -k1,1 -k2,2n -u > {output.m2_pos_bed} 2>> {log} &&
 
-        bcftools query -i 'TYPE="indel"' -f '%CHROM\\t%POS\\t%REF\\t%ALT\\n' {output.st_norm} \
-        | awk 'BEGIN{{OFS="\\t"}}{{
-            lr=length($3); la=length($4);
-            if(la>lr)      print $1, $2-1, $2, "INS";
-            else if(lr>la) print $1, $2-1, $2-1+(lr-la), "DEL";
-        }}' > {output.st_bed_uns} 2>> {log} &&
+        # 3) DeepSomatic mapping at Mutect2 positions (CHROM POS DS_FILTER)
+        bcftools view -R {output.m2_pos_bed} {output.ds_norm} -Ou \
+        | bcftools query -f '%CHROM\t%POS\t%FILTER\n' \
+        | sort -k1,1 -k2,2n \
+        | awk 'BEGIN{{OFS="\t"}}{{
+                key=$1 FS $2;
+                if(key!=prev && NR>1){{print pchr,ppos,best}}
+                if(key!=prev){{pchr=$1; ppos=$2; best=$3}}
+                else if($3=="PASS"){{best="PASS"}}
+                prev=key
+            }}
+            END{{if(NR>0) print pchr,ppos,best}}' \
+        | bgzip -c > {output.ds_map} 2>> {log} &&
 
-        # 2b) Sort BEDs once (numeric), then use bedtools -sorted
-        sort --parallel={threads} -S {resources.mem_mb}M -k1,1 -k2,2n {output.m2_bed_uns} > {output.m2_bed} 2>> {log} && 
-        sort --parallel={threads} -S {resources.mem_mb}M -k1,1 -k2,2n {output.st_bed_uns} > {output.st_bed} 2>> {log} &&
+        tabix -f -s1 -b2 -e2 {output.ds_map} >> {log} 2>&1 &&
 
-        # 3) Intersect and require SAME TYPE ONLY (faster with -sorted)
-        bedtools intersect -sorted -a {output.m2_bed} -b {output.st_bed} -wa -wb \
-        | awk 'BEGIN{{OFS="\\t"}} {{ if($4==$8) print $1,$2,$3 }}' \
-        | sort --parallel={threads} -S {resources.mem_mb}M -k1,1 -k2,2n -u > {output.match_bed} 2>> {log} &&
+        # 4) Keep match_bed for record keeping only (no longer used to subset Mutect2)
+        zcat {output.ds_map} \
+        | awk 'BEGIN{{OFS="\t"}}{{print $1,$2-1,$2}}' \
+        | sort -k1,1 -k2,2n -u > {output.match_bed} 2>> {log} &&
 
-        # 4) Subset Mutect2 to matched regions
-        if [ -s {output.match_bed} ]; then
-          bcftools view --threads {threads} -R {output.match_bed} --write-index -Oz -o {output.ind_low_AD_strelka} {output.m2_norm}
-        else
-          bcftools view --threads {threads} -h --write-index -Oz -o {output.ind_low_AD_strelka} {output.m2_norm}
-        fi >> {log} 2>&1
+        # 4b) "m2_intersect" is now just all Mutect2 (post-norm), kept for backwards compatibility
+        cp -f {output.m2_norm} {output.m2_intersect} >> {log} 2>&1 &&
+        bcftools index -f -c {output.m2_intersect} >> {log} 2>&1 &&
+
+        # 5) Annotate Mutect2 with DeepSomatic FILTER as INFO/DS_FILTER (left-join by position)
+        bcftools annotate --threads {threads} \
+        -a {output.ds_map} \
+        -c CHROM,POS,INFO/DS_FILTER \
+        -h <(printf '%s\n' '##INFO=<ID=DS_FILTER,Number=1,Type=String,Description="DeepSomatic FILTER status at this position (PASS, RefCall, LowQual, NoCall, GERMLINE). Missing means not present in DeepSomatic. Annotated by position only.">') \
+        --write-index -Oz -o {output.anno} {output.m2_intersect} >> {log} 2>&1 &&
+
+        # 6) Split into SNVs and INDELs
+        bcftools view --threads {threads} -v snps   --write-index -Oz -o {output.SNV_intersect_DS}   {output.anno} >> {log} 2>&1 &&
+        bcftools view --threads {threads} -v indels --write-index -Oz -o {output.INDEL_intersect_DS} {output.anno} >> {log} 2>&1
         """
 
-#  Merge high-AD SNVs and INDELs.
+# Filter DeepSomatic intersected SNVs using VAF
 # -----------------------------------------------------
-rule merge_high_AD:
+rule SNV_DeepSomatic_intersect_Filtered:
     input:
-        s=f'{ODIR}/temp/3-snv_high_AD_{{tum}}.vcf.gz',
-        i1=f'{ODIR}/temp/3-snv_high_AD_{{tum}}.vcf.gz.csi',
-        ind=f'{ODIR}/temp/4-indel_high_AD_{{tum}}.vcf.gz',
-        i2=f'{ODIR}/temp/4-indel_high_AD_{{tum}}.vcf.gz.csi'
+        snv  = f"{ODIR}/temp/3-SNV_DeepSomatic_intersect_{{tum}}.vcf.gz",
+        i1 = f"{ODIR}/temp/3-SNV_DeepSomatic_intersect_{{tum}}.vcf.gz.csi"
     output:
-        v=f'{ODIR}/temp/6-high_AD_variants_{{tum}}.vcf.gz',
-        i=f'{ODIR}/temp/6-high_AD_variants_{{tum}}.vcf.gz.csi'
+        snv_filtered  = f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz",
+        i2 = f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz.csi",
+        # record keeping
+        filt_counts = f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.filter_counts.txt",
+        ds_counts   = f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.ds_filter_counts.txt"
     conda:
         "envs/bcftools.yaml"
-    threads: 1
+    threads: 4
     resources:
-        mem_mb=4000,
-        slurm_cpus_per_task=1
+        mem_mb=16000,
+        slurm_cpus_per_task=4
     log:
-        f"{ODIR}/logs/8-merge_high_AD_{{tum}}.log"
+        f"{ODIR}/logs/7-DeepSomatic_SNV_filter_{{tum}}.log"
     shell:
-        """
+        r"""
         echo "----------------------------------------------" >> {log} 2>&1 &&
         echo "----------------------------------------------" >> {log} 2>&1 &&
         date >> {log} 2>&1 &&
-        bcftools concat  --write-index --allow-overlaps --rm-dups none -Oz -o {output.v} {input.s} {input.ind} >> {log} 2>&1
+
+        set -euo pipefail
+        export LC_ALL=C
+
+        # Keep criteria (Tumour is sample index 1; AF is Number=A so use AF[1:0]):
+        # 1) Mutect2 FILTER == clustered_events: keep only if VAF > 10%
+        # 2) Mutect2 FILTER == PASS or panel_of_normal and VAF > 5%: keep (DeepSomatic not required)
+        # 3) Mutect2 FILTER == PASS or panel_o_normal and 1% < VAF <= 5%: keep only if INFO/DS_FILTER == PASS
+        EXPR='(
+        (FILTER="clustered_events" || FILTER="clustered_events;panel_of_normals" || FILTER="panel_of_normals;clustered_events")
+        && FMT/AF[1:0] > 0.10
+        )
+        ||
+        (
+        (FILTER="PASS" || FILTER="panel_of_normals")
+        && FMT/AF[1:0] > 0.05
+        )
+        ||
+        (
+        (FILTER="PASS" || FILTER="panel_of_normals")
+        && FMT/AF[1:0] > 0.01 && FMT/AF[1:0] <= 0.05
+        && INFO/DS_FILTER="PASS"
+        )'
+
+        bcftools view --write-index -Oz -o {output.snv_filtered} -i "$EXPR" {input.snv} >> {log} 2>&1
+
+        bcftools query -f '%FILTER\n' {output.snv_filtered} \
+          | sort | uniq -c | sort -nr > {output.filt_counts} 2>> {log} &&
+
+        bcftools query -f '%INFO/DS_FILTER\n' {output.snv_filtered} \
+          | sort | uniq -c | sort -nr > {output.ds_counts} 2>> {log}
         """
 
-#  Merge low-AD SNVs and strelaka- intersected INDELs.
-# -----------------------------------------------------
-use rule merge_high_AD as merge_low_AD with:
-    input:
-        s=f'{ODIR}/temp/3-snv_low_AD_{{tum}}.vcf.gz',
-        i1=f'{ODIR}/temp/3-snv_low_AD_{{tum}}.vcf.gz.csi',
-        ind=f'{ODIR}/temp/5-indel_low_AD_strelka_intersected_{{tum}}.vcf.gz',
-        i2=f'{ODIR}/temp/5-indel_low_AD_strelka_intersected_{{tum}}.vcf.gz.csi'
+# Install MutationalPatterns and the reference-specific BSgenome into a workflow-local R library.
+# -------------------------------------------------------------------------------------------------
+
+rule install_indel_deepsomatic_prereqs:
     output:
-        v=f'{ODIR}/temp/6-low_AD_variants_{{tum}}.vcf.gz',
-        i=f'{ODIR}/temp/6-low_AD_variants_{{tum}}.vcf.gz.csi'
+        done=bsgenome_prereq()
+    params:
+        ref_genome=str(config["ref_genome_version"]).lower(),
+    conda:
+        "envs/indel_ffpe_sig.yaml"
+    threads: 4
+    resources:
+        mem_mb=16000,
+        slurm_cpus_per_task=4
     log:
-        f"{ODIR}/logs/9-merge_low_AD_{{tum}}.log"
+        f"{ODIR}/logs/8.0-install_indel_deepsomatic_prereqs.log"
+    shell:
+        r"""
+        echo "----------------------------------------------" >> {log} 2>&1
+        echo "----------------------------------------------" >> {log} 2>&1
+        date >> {log} 2>&1
+
+        Rscript --vanilla workflow/scripts/install_mutationalpatterns_bsgenome.R \
+          --ref {params.ref_genome} 
+
+        # sentinel
+        touch {output.done} >> {log} 2>&1
+        """
+
+
+
+# Filter DeepSomatic intersected INDELs with VAF and using muttype (r-MutationalPatterns)
+# -----------------------------------------------------
+rule INDEL_DeepSomatic_intersect_Filtered:
+    input:
+        v=f"{ODIR}/temp/3-INDEL_DeepSomatic_intersect_{{tum}}.vcf.gz",
+        i=f"{ODIR}/temp/3-INDEL_DeepSomatic_intersect_{{tum}}.vcf.gz.csi",
+        prereq=bsgenome_prereq()
+    output:
+        v=f"{ODIR}/temp/4-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz",
+        i=f"{ODIR}/temp/4-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz.csi",
+        report=f"{ODIR}/temp/4-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.report.tsv"
+    conda:
+        "envs/indel_ffpe_sig.yaml" # Sharing env with ffpe_sig step for MutationalPatterns muttype annotation
+    threads: 4
+    resources:
+        mem_mb=16000,
+        slurm_cpus_per_task=4
+    params:
+        tum=lambda wc: wc.tum,
+        ref_genome=str(config["ref_genome_version"]).lower()   # "grch37" or "grch38"
+    log:
+        f"{ODIR}/logs/8-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.log"
+    script:
+        "scripts/filter_indel_deepsomatic.R"
+
+
+# Merge filtered SNVs + INDELs into a single VCF
+# -----------------------------------------------------
+rule merge_SNV_INDEL_DeepSomatic_intersect_Filtered:
+    input:
+        snv=f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz",
+        snv_i=f"{ODIR}/temp/4-SNV_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz.csi",
+        indel=f"{ODIR}/temp/4-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz",
+        indel_i=f"{ODIR}/temp/4-INDEL_DeepSomatic_intersect_Filtered_{{tum}}.vcf.gz.csi"
+    output:
+        v=f"{ODIR}/temp/5-merge-snv_indel_DS_intersect_filtered_{{tum}}.vcf.gz",
+        i=f"{ODIR}/temp/5-merge-snv_indel_DS_intersect_filtered_{{tum}}.vcf.gz.csi"
+    conda:
+        "envs/bcftools.yaml"
+    threads: 8
+    resources:
+        mem_mb=16000,
+        slurm_cpus_per_task=8
+    log:
+        f"{ODIR}/logs/9-merge-snv_indel_DS_intersect_filtered_{{tum}}.log"
+    shell:
+        r"""
+        echo "----------------------------------------------" >> {log} 2>&1
+        echo "----------------------------------------------" >> {log} 2>&1
+        date >> {log} 2>&1
+
+        set -euo pipefail
+        export LC_ALL=C
+
+        # Stream as uncompressed BCF between steps (-Ou), then compress with threads.
+        bcftools concat -a -Ou {input.snv} {input.indel} 2>> {log} \
+          | bcftools sort -Ou 2>> {log} \
+          | bcftools view -Oz --threads {threads} -o {output.v} 2>> {log}
+
+        # Create CSI explicitly
+        bcftools index --csi -f {output.v} 2>> {log}
+        """
+
+
+
+# Split merged DS-filtered VCF into high/low AD tiers
+# -----------------------------------------------------
+rule split_AD_tiers_DS_intersect_filtered:
+    input:
+        v=f"{ODIR}/temp/5-merge-snv_indel_DS_intersect_filtered_{{tum}}.vcf.gz",
+        i=f"{ODIR}/temp/5-merge-snv_indel_DS_intersect_filtered_{{tum}}.vcf.gz.csi"
+    output:
+        v_high=f"{ODIR}/temp/6-high_AD_variants_{{tum}}.vcf.gz",
+        i_high=f"{ODIR}/temp/6-high_AD_variants_{{tum}}.vcf.gz.csi",
+        v_low=f"{ODIR}/temp/6-low_AD_variants_{{tum}}.vcf.gz",
+        i_low=f"{ODIR}/temp/6-low_AD_variants_{{tum}}.vcf.gz.csi"
+    params:
+        AD_TIER=AD_TIER
+    conda:
+        "envs/bcftools.yaml"
+    threads: 2
+    resources:
+        mem_mb=4000,
+        slurm_cpus_per_task=2
+    log:
+        f"{ODIR}/logs/10-split_AD_tiers_DS_intersect_filtered_{{tum}}.log"
+    shell:
+        r"""
+        echo "----------------------------------------------" >> {log} 2>&1 &&
+        echo "----------------------------------------------" >> {log} 2>&1 &&
+        date >> {log} 2>&1 &&
+
+        set -euo pipefail
+        export LC_ALL=C
+
+        # 1) High AD tier
+        bcftools view --threads {threads} --write-index \
+          -i 'FMT/AD[1:1]>={params.AD_TIER}' \
+          -Oz -o {output.v_high} {input.v} >> {log} 2>&1 &&
+
+        # 2) Low AD tier
+        bcftools view --threads {threads} --write-index \
+          -i 'FMT/AD[1:1]<{params.AD_TIER}' \
+          -Oz -o {output.v_low} {input.v} >> {log} 2>&1
+        """
+
 
 
 # Create mutation information file for Microsec 
@@ -372,7 +511,7 @@ rule mutation_information_file:
     params:
         chr=get_chr
     log:
-        f"{ODIR}/logs/10-mutation_info_{{AD_tier}}_variants_{{tum}}.log"
+        f"{ODIR}/logs/11-mutation_info_{{AD_tier}}_variants_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -418,7 +557,7 @@ rule sample_information_file:
         mem_mb = 5000,
         slurm_cpus_per_task=1
     log:
-        f"{ODIR}/logs/11-sample_info_{{AD_tier}}_variants_{{tum}}.log"
+        f"{ODIR}/logs/12-sample_info_{{AD_tier}}_variants_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -453,7 +592,7 @@ rule install_bsgenome_hg19:
         mem_mb=8000,
         slurm_cpus_per_task=4
     log:
-        f"{ODIR}/logs/12.0_install_bsgenome_hg19.log"
+        f"{ODIR}/logs/13.0_install_bsgenome_hg19.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -491,7 +630,7 @@ rule microsec_high_AD:
         threshold_p=config["pval_threshold_high_AD"],
         mem_per_thread=lambda wildcards, threads, resources: int(resources.mem_mb / threads)
     log:
-        f"{ODIR}/logs/12-microsec_high_AD_{{tum}}.log"
+        f"{ODIR}/logs/13-microsec_high_AD_{{tum}}.log"
     script:
         "scripts/MicroSEC_parameterised2.R"
 
@@ -517,7 +656,7 @@ rule microsec_low_AD:
         threshold_p=config["pval_threshold_low_AD"],
         mem_per_thread=lambda wildcards, threads, resources: int(resources.mem_mb / threads)
     log:
-        f"{ODIR}/logs/13-microsec_low_AD_{{tum}}.log"
+        f"{ODIR}/logs/14-microsec_low_AD_{{tum}}.log"
     script:
         "scripts/MicroSEC_parameterised2.R"
 
@@ -542,7 +681,7 @@ rule microsec_annotate:
     conda:
         "envs/bcftools.yaml"
     log:
-        f"{ODIR}/logs/14-microsec_annotate_{{AD_tier}}_variants_{{tum}}.log"
+        f"{ODIR}/logs/15-microsec_annotate_{{AD_tier}}_variants_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -595,9 +734,29 @@ rule microsec_annotate:
         # 3) Normal path: annotate
         echo "[microsec_annotate] Annotating VCF using MicroSEC output." >> {log} 2>&1
 
-        zcat {input.microsec} | sed 's/^Sample/#Sample/' > {output.microsec_output_1} 2>> {log} &&
+        # Detect whether the VCF uses chr-prefixed contigs (header-based, robust)
+        if bcftools view -h {input.v} | grep -q '^##contig=<ID=chr'; then
+            WANT_CHR=1
+        else
+            WANT_CHR=0
+        fi
+
+        # Rewrite MicroSEC TSV so column 3 (Chr) matches VCF contig style.
+        # Use Chr_original (col 11) as the source of truth (e.g. "1"), then add/remove "chr" if needed.
+        zcat {input.microsec} \
+        | awk -F'\t' -v OFS='\t' -v want_chr="$WANT_CHR" '
+            NR==1 {{print; next}}
+            {{
+                $3=$11;
+                if (want_chr==1 && $3 !~ /^chr/) $3="chr"$3;
+                if (want_chr==0) sub(/^chr/,"",$3);
+                print
+            }}' \
+        | sed '1s/^Sample/#Sample/' > {output.microsec_output_1} 2>> {log} &&
+
         bgzip -c {output.microsec_output_1} > {output.microsec_output_2} 2>> {log} &&
         tabix -f -s3 -b4 -e4 {output.microsec_output_2} >> {log} 2>&1 &&
+
         bcftools annotate \
             --write-index --threads {threads} \
             -a {output.microsec_output_2} \
@@ -624,7 +783,7 @@ rule AD_tiers_merge:
     conda:
         "envs/bcftools.yaml"
     log:
-        f"{ODIR}/logs/15-AD_tiers_merge_{{tum}}.log"
+        f"{ODIR}/logs/16-AD_tiers_merge_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -633,6 +792,8 @@ rule AD_tiers_merge:
         
         bcftools concat  --write-index --allow-overlaps --rm-dups none -Oz -o {output.v} {input.high_v} {input.low_v} >> {log} 2>&1
         """
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 #  Download VEP cache
 # -----------------------------------------------------
@@ -648,7 +809,7 @@ rule download_VEP_cache:
     container:
         "docker://ensemblorg/ensembl-vep"
     log:
-        f"{ODIR}/logs/16-download_VEP_cache.log"
+        f"{ODIR}/logs/17-download_VEP_cache.log"
     params:
         ref_gen=str(config["ref_genome_version"]).lower()
     shell:
@@ -688,7 +849,7 @@ rule VEP_annotate:
     params:
         ncbi="GRCh38" if str(config["ref_genome_version"]).lower()=="grch38" else "GRCh37"
     log:
-        f"{ODIR}/logs/17-VEP_annotate_{{tum}}.log"
+        f"{ODIR}/logs/18-VEP_annotate_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -734,7 +895,7 @@ rule msec_filter:
     conda:
         "envs/bcftools.yaml"
     log:
-        f"{ODIR}/logs/18-msec_filter_{{tum}}.log"
+        f"{ODIR}/logs/19-msec_filter_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -803,7 +964,7 @@ rule fill_tags_VAF:
     conda:
         "envs/bcftools.yaml"
     log:
-        f"{ODIR}/logs/19-fill_tags_VAF_{{tum}}.log"
+        f"{ODIR}/logs/20-fill_tags_VAF_{{tum}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -842,7 +1003,7 @@ rule VAF_filter:
     conda:
         "envs/bcftools.yaml"
     log:
-        f"{ODIR}/logs/20-VAF_filter_{{tum}}_{{VAF_threshold}}.log"
+        f"{ODIR}/logs/21-VAF_filter_{{tum}}_{{VAF_threshold}}.log"
     shell:
         """
         echo "----------------------------------------------" >> {log} 2>&1 &&
@@ -877,8 +1038,8 @@ rule ffpe_signature:
         ref_genome=str(config["ref_genome_version"]).lower(),
         sample_names=samples["tumour_name"].to_list()
     conda:
-        "envs/ffpe_sig.yaml"
+        "envs/indel_ffpe_sig.yaml"
     log:
-        f"{ODIR}/logs/21-ffpe_signature.log"
+        f"{ODIR}/logs/22-ffpe_signature.log"
     script:
         "scripts/ffpe_sig.R"
