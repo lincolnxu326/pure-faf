@@ -1,0 +1,6 @@
+simple repeats were downloaded from UCSC table browser. 
+trf - Simple repeats track
+
+
+Then to convert to bed file:
+zgrep -v "#" trf_simple_repeat.tsv.gz | cut -f2,3,4 >trf_simple_repeat.bed
