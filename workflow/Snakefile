@@ -735,7 +735,9 @@ rule microsec_annotate:
         echo "[microsec_annotate] Annotating VCF using MicroSEC output." >> {log} 2>&1
 
         # Detect whether the VCF uses chr-prefixed contigs (header-based, robust)
-        if bcftools view -h {input.v} | grep -q '^##contig=<ID=chr'; then
+        # Do not use grep -q here: it exits at the first match, bcftools then gets SIGPIPE and,
+        # under pipefail, the test is always false, so chr-prefixed (hg38) runs lost all MicroSEC annotations.
+        if bcftools view -h {input.v} | grep '^##contig=<ID=chr' >/dev/null; then
             WANT_CHR=1
         else
             WANT_CHR=0
